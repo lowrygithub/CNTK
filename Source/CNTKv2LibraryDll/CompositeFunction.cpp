@@ -20,6 +20,7 @@
 #include "Value.h"
 #include "RNNNodes.h"
 #include "UserDefinedV2FunctionNode.h"
+#include "BlockFunction.h"
 
 using namespace Microsoft::MSR::CNTK;
 
@@ -122,13 +123,19 @@ namespace CNTK
         Dictionary stateDictionary; 
         for (const auto& kv : m_variableToNodeMap)
         {
-            if (kv.second->Is<RngUser>()) 
+            if (kv.second->Is<RngUser>() && kv.first.IsOutput())
             {
-                auto rng = kv.second->As<RngUser>();
-                Dictionary state;
-                state[rngSeedKey] = static_cast<size_t>(rng->GetRngSeed());
-                state[rngOffsetKey] = static_cast<size_t>(rng->GetRngOffset());
-                stateDictionary[kv.first.Owner()->Uid()] = state;
+                // The RNG state should be associated with the actual function that the computation node
+                // corresponds to, and not the block primitives that wrap the actual function
+                auto ownerFunction = kv.first.Owner().get();
+                if (!dynamic_cast<BlockFunction*>(ownerFunction))
+                {
+                    auto rng = kv.second->As<RngUser>();
+                    Dictionary state;
+                    state[rngSeedKey] = static_cast<size_t>(rng->GetRngSeed());
+                    state[rngOffsetKey] = static_cast<size_t>(rng->GetRngOffset());
+                    stateDictionary[ownerFunction->Uid()] = state;
+                }
             }
         }
 
@@ -158,7 +165,7 @@ namespace CNTK
             if (uidToInputMap.find(inputVar.Uid()) != uidToInputMap.end())
             {
                 LogicError("Input uids are not unique (several inputs share '%ls' uid) "
-                        "(%s).", inputVar.Uid().c_str(), GetVersionsString<CompositeFunction>(s_serializationVersion, version).c_str());
+                           "(%s).", inputVar.Uid().c_str(), GetVersionsString<CompositeFunction>(s_serializationVersion, version).c_str());
             }
             uidToInputMap[inputVar.Uid()] = inputVar;
         }
@@ -180,13 +187,12 @@ namespace CNTK
             allPrimitiveFunctions.insert(root);
 
             auto primitiveFunction = dynamic_cast<PrimitiveFunction*>(root.get());
+
             // Since Combine simply forwards other functions' outputs, all of its outputs
             // should already be in the uidToInputMap.
             auto opType = primitiveFunction->OpType();
             if (opType == PrimitiveOpType::Combine)
-            {
                 continue;
-            }
 
             if (primitiveFunction->IsStateful())
             {
@@ -304,46 +310,6 @@ namespace CNTK
     // when the new CNTK v2 model serialization format is ready.
     /*static*/ const std::wstring CompositeFunction::InternalDefaultDynamicAxisName = L"*";
     /*static*/ const std::wstring CompositeFunction::InternalNoSequenceAxisName = L"__noSequenceAxis";
-
-    // Replace any PlaceHolder Variables in the graph of Functions underlying 'this' CompositeFunction. All PlaceHolder variables
-    // should have been replaced before performing any Forward compute of 'this' Function.
-    /*virtual*/ void CompositeFunction::ReplacePlaceholdersInPlace(const std::unordered_map<Variable, Variable>& placeholderReplacements,
-                                                                   std::unordered_set<const Function*>& visitedFunctions,
-                                                                   std::unordered_set<Variable>& replacedPlaceholders)
-    {
-        RootFunction()->ReplacePlaceholdersInPlace(placeholderReplacements, visitedFunctions, replacedPlaceholders);
-
-        // If any of the placeholders were replaced with Output variables, let's add the graph of function underneath each of those to 'm_allPrimitiveFunctions' set
-        for (auto replacedPlaceholder : replacedPlaceholders)
-        {
-            auto replacingVariable = placeholderReplacements.at(replacedPlaceholder);
-            if (replacingVariable.IsOutput())
-            {
-                auto ownerFunc = replacingVariable.Owner();
-                std::unordered_set<FunctionPtr> visitedFunctions2;
-                Collect(ownerFunc, visitedFunctions2);
-
-                // Add the newly visited functions to 'm_allPrimitiveFunctions' set
-                m_allPrimitiveFunctions.insert(visitedFunctions2.begin(), visitedFunctions2.end());
-            }
-        }
-        std::unordered_map<const Function*, size_t> functionVisitCounts;
-
-        // An arbitrary cap on changing output shape of recurrent nodes, to detect infinite inference loops
-        const size_t maxNumValidationPassesAllowed = 25;
-        bool recurrentNodeOutputModified = false;
-        size_t numValidationPasses = 0;
-        do
-        {
-            recurrentNodeOutputModified = false;
-            functionVisitCounts.clear();
-            RootFunction()->ValidateOrUpdateOutputs(functionVisitCounts, recurrentNodeOutputModified);
-            numValidationPasses++;
-        } while (recurrentNodeOutputModified && (numValidationPasses < maxNumValidationPassesAllowed));
-
-        if (numValidationPasses >= maxNumValidationPassesAllowed)
-            LogicError("A recurrent node output shape change happened in successive %d validation passes indicating a potential infinite inference loop!", (int)numValidationPasses);
-    }
 
     // Recursively create a sub-network of ComputationNode instances corresponding to the graph of Functions 
     // underlying the specified 'variable' and return the ComputationNode instance that corresponds to the 
@@ -819,7 +785,21 @@ namespace CNTK
             inputNodes.push_back((baseNodePtr != nullptr) ? baseNodePtr->template As<ComputationNode<ElementType>>()->shared_from_this() : nullptr);
         }
 
-        computationNodePtr = CreateComputationNode(variable, function, inputNodes, network, variableToNodeMap);
+        BlockFunction* blockFunction = dynamic_cast<BlockFunction*>(function);
+        if (blockFunction)
+        {
+            // For block function, map each argument placeholder of the underlying composite to
+            // the computation node corresponding to the block input that the argument placeholder
+            // of the composite is mapped to.
+            auto& compositeArgumentsMap = blockFunction->CompositeArgumentsMap();
+            for (auto& compositeArgumentMapping : compositeArgumentsMap)
+                variableToNodeMap[compositeArgumentMapping.first] = variableToNodeMap.at(compositeArgumentMapping.second);
+
+            auto& compositeOutputsMap = blockFunction->CompositeOutputsMap();
+            return GetNode(compositeOutputsMap.at(variable), network, builder, variableToNodeMap, isVariableRootMap);
+        }
+        else
+            computationNodePtr = CreateComputationNode(variable, function, inputNodes, network, variableToNodeMap);
 
         PrimitiveFunction* primitiveFunction = dynamic_cast<PrimitiveFunction*>(function);
         if (!primitiveFunction || (primitiveFunction->OpType() != PrimitiveOpType::Combine))
@@ -896,12 +876,18 @@ namespace CNTK
                 auto& currentComputationNode = varNodePair.second;
                 auto& currentComputationNodeInputs = currentComputationNode->GetInputs();
                 auto& currentVar = varNodePair.first;
+                if (!currentVar.IsOutput())
+                    continue;
 
                 if (std::find(currentComputationNodeInputs.begin(), currentComputationNodeInputs.end(), nullptr) != currentComputationNodeInputs.end())
                 {
                     // This ComputationNode has at least one null input which now needs to be properly attached
 
                     const PrimitiveFunction* primitiveFunc = dynamic_cast<const PrimitiveFunction*>(currentVar.Owner().get());
+
+                    // Skip block primitives since they do not directly map to a computation node
+                    if (primitiveFunc->OpType() == PrimitiveOpType::Block)
+                        continue;
 
                     // Let's reorder properly since the ordering of inputs of CNTK internal ComputationNode may be different from the PrimitiveFunction inputs ordering
                     auto inputVars = primitiveFunc->Inputs();
@@ -1263,15 +1249,7 @@ namespace CNTK
 
         if (!missingRequiredArguments.empty())
         {
-            std::wstring missingRequiredArgumentNames;
-            for (auto missingRequiredArgument : missingRequiredArguments)
-            {
-                if (!missingRequiredArgumentNames.empty())
-                    missingRequiredArgumentNames += L", ";
-
-                missingRequiredArgumentNames += missingRequiredArgument.Name();
-            }
-
+            std::wstring missingRequiredArgumentNames = NamedListString(missingRequiredArguments);
             InvalidArgument("Function::Forward: Required arguments (%S) values that the requested output(s) depend on has not been provided", missingRequiredArgumentNames.c_str());
         }
 

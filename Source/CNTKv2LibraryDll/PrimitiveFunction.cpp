@@ -15,6 +15,8 @@
 #include "RecurrentNodes.h"
 #include "Serialization.h"
 #include "RNNNodes.h"
+#include "BlockFunction.h"
+#include "CompositeFunction.h"
 
 using namespace Microsoft::MSR::CNTK;
 
@@ -598,6 +600,11 @@ namespace CNTK
         return{ OutputVariable(outputShape, outputDataType, owner, outputDynamicAxes, functionName.empty() ? L"" : functionName + L"_output") };
     }
 
+    /*virtual*/ std::vector<Variable> PrimitiveFunction::GetOutputVariables(bool inferDimensions)
+    {
+        return GetOutputVariables(m_op, m_inputs, this, m_attributes, inferDimensions, Name());
+    }
+
     static const std::wstring s_primitiveFunctionTypeValue = L"PrimitiveFunction";
 
     /*virtual*/ Dictionary PrimitiveFunction::Serialize() const 
@@ -621,6 +628,20 @@ namespace CNTK
 
         dict[inputsKey] = std::move(inputUids);
 
+        if (m_op == PrimitiveOpType::Block)
+        {
+            auto blockFunction = dynamic_cast<const BlockFunction*>(this);
+            dict[blockFunctionCompositeKey] = blockFunction->Composite()->Serialize();
+            dict[blockFunctionOpNameKey] = blockFunction->OpName();
+
+            auto& blockArgumentsMap = blockFunction->CompositeArgumentsMap();
+            Dictionary serializedArgumentsMap;
+            for (auto argumentMapping : blockArgumentsMap)
+                serializedArgumentsMap[argumentMapping.first.Uid()] = argumentMapping.second.Uid();
+
+            dict[blockFunctionCompositeArgumentsMapKey] = serializedArgumentsMap;
+        }
+
         return dict;
     }
 
@@ -629,7 +650,6 @@ namespace CNTK
                                                           const CNTK::DeviceDescriptor& device)
     {
         static const vector<std::wstring> s_requiredDictionaryKeys = { typeKey, opKey, uidKey, attributesKey, inputsKey, nameKey };
-       
         size_t version = ValidateDictionary<PrimitiveFunction>(dict, s_requiredDictionaryKeys, s_primitiveFunctionTypeValue, s_serializationVersion);
 
         PrimitiveOpType op = PrimitiveOpType(dict[opKey].Value<std::size_t>());
@@ -637,7 +657,7 @@ namespace CNTK
         // The hard requirement that the serialization depends on is that
         // new op type values are only added to the end of the list, after Combine.
         // This also applies to other enums (DataType, VariableKind, etc.)
-        if (op > PrimitiveOpType::Pass)
+        if (op > PrimitiveOpType::Block)
         {
             LogicError("Unexpected op '%ls':'%u' (%s).", 
                         opKey.c_str(), 
@@ -664,7 +684,36 @@ namespace CNTK
             inputs.push_back(uidToVariableMap.at(inputUid));
         }
 
-        return std::shared_ptr<PrimitiveFunction>(new PrimitiveFunction(op, inputs, std::move(attributes), name, uid), 
-                                                  [](PrimitiveFunction* ptr) { delete ptr; });
+        if (op == PrimitiveOpType::Block)
+        {
+            static const vector<std::wstring> s_requiredBlockFunctionDictionaryKeys = { blockFunctionCompositeKey, blockFunctionOpNameKey, blockFunctionCompositeArgumentsMapKey };
+            ValidateDictionary<PrimitiveFunction>(dict, s_requiredBlockFunctionDictionaryKeys, s_primitiveFunctionTypeValue, s_serializationVersion);
+
+            auto composite = CompositeFunction::Deserialize(dict[blockFunctionCompositeKey].Value<Dictionary>(), device);
+
+            auto compositeArguments = composite->Arguments();
+            auto findCompositeArgumentByUid = [&compositeArguments](const std::wstring& uid) {
+                return *std::find_if(compositeArguments.begin(), compositeArguments.end(), [&uid](const Variable& argument) {
+                    return (argument.Uid() == uid);
+                });
+            };
+
+            const auto& blockOpName = dict[blockFunctionOpNameKey].Value<std::wstring>();
+
+            const Dictionary& blockArgumentsMapDict = dict[blockFunctionCompositeArgumentsMapKey].Value<Dictionary>();
+            std::unordered_map<Variable, Variable> argumentsMap;
+            for (const auto& kv : blockArgumentsMapDict)
+            {
+                const auto& argumentUid = kv.first;
+                const auto& argumentMappingUid = kv.second.Value<std::wstring>();
+                argumentsMap.insert({ findCompositeArgumentByUid(argumentUid), uidToVariableMap.at(argumentMappingUid) });
+            }
+
+            return std::shared_ptr<BlockFunction>(new BlockFunction(std::move(composite), argumentsMap, blockOpName, std::move(attributes), name, uid),
+                                                  [](BlockFunction* ptr) { delete ptr; });
+        }
+        else
+            return std::shared_ptr<PrimitiveFunction>(new PrimitiveFunction(op, inputs, std::move(attributes), name, uid), 
+                                                      [](PrimitiveFunction* ptr) { delete ptr; });
     }
 }
