@@ -34,7 +34,7 @@ public:
 
 private:
     // Gets next sequence descriptions with total size less than sampleCount.
-    void GetNextSequenceDescriptions(size_t sampleCount, std::vector<SequenceDescription>& result);
+    void GetNextSequenceDescriptions(size_t globalSampleCount, size_t sampleCount, std::vector<SequenceDescription>& result);
 
     // Get chunk index for the sample offset from the beginning of the sweep.
     ChunkIdType GetChunkIndexOf(size_t samplePosition);

@@ -745,6 +745,52 @@ BOOST_AUTO_TEST_CASE(CorpusDescriptorFromFile)
     remove("test.tmp");
 }
 
+BOOST_AUTO_TEST_CASE(CheckEpochBoundarySingleWorker)
+{
+    size_t chunkSizeInSamples = 1000;
+    size_t sweepNumberOfSamples = 15000;
+    uint32_t maxSequenceLength = 1;
+    size_t randomizationWindow = chunkSizeInSamples * 5;
+    auto deserializer = make_shared<SequentialDeserializer>(0, chunkSizeInSamples, sweepNumberOfSamples, maxSequenceLength);
+
+    auto underTestBlock = make_shared<BlockRandomizer>(0, randomizationWindow, deserializer, true, true, false);
+    auto unterTestNo = make_shared<NoRandomizer>(deserializer, true, false);
+
+    auto test = [](SequenceEnumeratorPtr underTest)
+    {
+        size_t epochSize = 128 * 3 + 63;
+
+        // First setup the enumerator to ead unbounded amount of data
+        EpochConfiguration config;
+        config.m_numberOfWorkers = 1;
+        config.m_workerRank = 0;
+        config.m_minibatchSizeInSamples = 128;
+        config.m_totalEpochSizeInSamples = epochSize;
+        config.m_epochIndex = 0;
+        underTest->StartEpoch(config);
+
+        Sequences s;
+        size_t numberOfSamples = 0;
+        do
+        {
+            s = underTest->GetNextSequences(128);
+            for (const auto& seq : s.m_data.front())
+                numberOfSamples += seq->m_numberOfSamples;
+        }
+        while (!s.m_endOfEpoch);
+
+        // Check the last minibatch is 63.
+        BOOST_CHECK_EQUAL(s.m_data.front().size(), 63);
+
+        // Check total number.
+        BOOST_CHECK_EQUAL(numberOfSamples, epochSize);
+    };
+
+    test(underTestBlock);
+    test(unterTestNo);
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()
 
 } } } }

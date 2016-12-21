@@ -65,11 +65,15 @@ namespace Microsoft { namespace MSR { namespace CNTK {
 
     // Gets next randomized sequence descriptions not exceeding the sample count.
     size_t SequenceRandomizer::GetNextSequenceDescriptions(
+        size_t globalSampleCount,
         size_t sampleCount, 
         const std::function<bool(const RandomizedSequenceDescription* s)>& isWorkerSequence,
         ClosedOpenChunkInterval& requiredChunks,
         std::vector<RandomizedSequenceDescription>& sequences)
     {
+        if (globalSampleCount == 0)
+            LogicError("Global sample should never be zero.");
+
         int samples = (int)sampleCount;
 
         // Initialize the range to the current chunk.
@@ -80,13 +84,13 @@ namespace Microsoft { namespace MSR { namespace CNTK {
 
         bool firstSequence = true;
         size_t totalSize = 0;
-        while (m_currentChunkCursor < m_randomizedChunks.size())
+        while (m_currentChunkCursor < m_randomizedChunks.size() && totalSize < globalSampleCount)
         {
             size_t sequenceOffsetInsideChunk = m_currentSequenceCursor - m_randomizedChunks[m_currentChunkCursor].m_sequencePositionStart;
             const RandomizedSequenceDescription* sequence = &m_sequenceWindow[m_currentChunkCursor - m_chunkWindowBegin][sequenceOffsetInsideChunk];
             int sequenceLength = (int)sequence->m_numberOfSamples;
-            bool shouldCount = isWorkerSequence(sequence);
 
+            bool shouldCount = isWorkerSequence(sequence);
             if (shouldCount)
             {
                 if (firstSequence || samples >= sequenceLength)
@@ -347,7 +351,7 @@ namespace Microsoft { namespace MSR { namespace CNTK {
         while (m_currentSampleCursor < sweepSampleOffset)
         {
             tmp.clear();
-            GetNextSequenceDescriptions(1, [](const RandomizedSequenceDescription*) { return true; }, window, tmp);
+            GetNextSequenceDescriptions(1, 1, [](const RandomizedSequenceDescription*) { return true; }, window, tmp);
         }
 
         return m_currentSampleCursor;

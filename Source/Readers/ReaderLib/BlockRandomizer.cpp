@@ -179,12 +179,12 @@ bool BlockRandomizer::GetNextSequenceDescriptions(size_t sampleCount, std::vecto
         return true;
     }
 
-    sampleCount = std::min(sampleCount, m_epochSize + m_epochStartPosition - m_globalSamplePosition);
-    assert(sampleCount != 0);
+    size_t globalCount = m_epochSize + m_epochStartPosition - m_globalSamplePosition;
+    assert(globalCount != 0);
 
     // Check that we do not go over the sweep.
-    sampleCount = std::min(sampleCount, (long)m_sweepTotalNumberOfSamples - m_globalSamplePosition % m_sweepTotalNumberOfSamples);
-    assert(sampleCount != 0);
+    globalCount = std::min(globalCount, (long)m_sweepTotalNumberOfSamples - m_globalSamplePosition % m_sweepTotalNumberOfSamples);
+    assert(globalCount != 0);
 
     // Randomizing sequences
     std::function<bool(const RandomizedSequenceDescription*)> localSequences;
@@ -194,6 +194,7 @@ bool BlockRandomizer::GetNextSequenceDescriptions(size_t sampleCount, std::vecto
         localSequences = [this](const RandomizedSequenceDescription*) { return true; };
 
     size_t minibatchSize = m_sequenceRandomizer->GetNextSequenceDescriptions(
+        globalCount,
         sampleCount,
         localSequences,
         windowRange,

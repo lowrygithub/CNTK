@@ -78,13 +78,16 @@ void NoRandomizer::MoveToNextSequence()
 }
 
 // Gets next sequence descriptions with total size less than sampleCount.
-void NoRandomizer::GetNextSequenceDescriptions(size_t sampleCount, std::vector<SequenceDescription>& result)
+void NoRandomizer::GetNextSequenceDescriptions(size_t globalSampleCount, size_t sampleCount, std::vector<SequenceDescription>& result)
 {
     assert(m_sequenceWindow.size() != 0);
     assert(m_chunkDescriptions[m_currentChunkPosition]->m_numberOfSequences > m_currentSequencePositionInChunk);
 
-    int samples = (int)sampleCount;
+    if (globalSampleCount == 0)
+        LogicError("Global sample should never be zero.");
 
+    int samples = (int)sampleCount;
+    size_t totalSize = 0;
     do
     {
         const SequenceDescription& sequence = m_sequenceWindow[m_currentSequencePositionInChunk];
@@ -102,12 +105,13 @@ void NoRandomizer::GetNextSequenceDescriptions(size_t sampleCount, std::vector<S
             samples -= (int)sequence.m_numberOfSamples;
 
         m_globalSamplePosition += sequence.m_numberOfSamples;
+        totalSize += sequence.m_numberOfSamples;
         m_globalSequencePosition++;
 
         MoveToNextSequence();
     }
     // Check whether the next sequence fits into the sample count, if not, exit.
-    while (samples - (int)m_sequenceWindow[m_currentSequencePositionInChunk].m_numberOfSamples >= 0);
+    while (samples - (int)m_sequenceWindow[m_currentSequencePositionInChunk].m_numberOfSamples >= 0 && totalSize < globalSampleCount);
 }
 
 size_t NoRandomizer::GetCurrentSamplePosition()
@@ -119,7 +123,7 @@ Sequences NoRandomizer::GetNextSequences(size_t sampleCount)
 {
     Sequences result;
     size_t endOfEpochPosition = m_config.m_totalEpochSizeInSamples * (m_config.m_epochIndex + 1);
-    if (m_globalSamplePosition >=  endOfEpochPosition)
+    if (m_globalSamplePosition >= endOfEpochPosition)
     {
         result.m_endOfEpoch = true;
         return result;
@@ -127,11 +131,12 @@ Sequences NoRandomizer::GetNextSequences(size_t sampleCount)
 
     // Check that we do not go over the sweep.
     size_t sweepPosition = m_globalSamplePosition % m_totalNumberOfSamples;
-    sampleCount = std::min(sampleCount, m_totalNumberOfSamples - sweepPosition);
+    size_t globalSampleCount = endOfEpochPosition - m_globalSamplePosition;
+    globalSampleCount = std::min(globalSampleCount, m_totalNumberOfSamples - sweepPosition);
     assert(sampleCount != 0);
 
     m_sequenceBuffer.clear();
-    GetNextSequenceDescriptions(sampleCount, m_sequenceBuffer);
+    GetNextSequenceDescriptions(globalSampleCount, sampleCount, m_sequenceBuffer);
 
     // m_globalSamplePosition is already shifted in GetNextSequenceDescriptions() by the current minibatch size.
     // Set the end-of-epoch flag (true when the current batch is last in an epoch).
