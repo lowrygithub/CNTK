@@ -83,7 +83,7 @@ public:
     }
 };
 
-MinibatchSourcePtr TextFormatMinibatchSourceWithMockCommunicator(const std::wstring& dataFilePath, const std::vector<StreamConfiguration>& streamConfigs, size_t epochSize = MinibatchSource::InfinitelyRepeat, bool randomize = true, size_t distributedAfterSampleCount = MinibatchSource::InfiniteSamples, size_t numWorkers = 2, size_t workerRank = 0)
+MinibatchSourcePtr TextFormatMinibatchSource(const std::wstring& dataFilePath, const std::vector<StreamConfiguration>& streamConfigs, size_t epochSize = MinibatchSource::InfinitelyRepeat, bool randomize = true, size_t distributedAfterSampleCount = MinibatchSource::InfiniteSamples, size_t numWorkers = 2, size_t workerRank = 0)
 {
     ::CNTK::Dictionary minibatchSourceConfiguration;
     minibatchSourceConfiguration[L"epochSize"] = epochSize;
@@ -113,6 +113,7 @@ MinibatchSourcePtr TextFormatMinibatchSourceWithMockCommunicator(const std::wstr
     }
 
     deserializerConfiguration[L"input"] = inputStreamsConfig;
+    deserializerConfiguration[L"chunkSizeInBytes"] = 1024; // Make sure we have several chunks.
     minibatchSourceConfiguration[L"deserializers"] = std::vector<::CNTK::DictionaryValue>({ deserializerConfiguration });
     minibatchSourceConfiguration[L"distributedAfterSampleCount"] = distributedAfterSampleCount;
     minibatchSourceConfiguration[L"numWorkers"] = numWorkers;
@@ -128,7 +129,7 @@ void TestMinibatchSourceWarmStart(size_t numMBs, size_t minibatchSize, size_t wa
     auto labelsStreamName = L"labels";
     const size_t numWorkers = 2;
 
-    auto minibatchSource = TextFormatMinibatchSourceWithMockCommunicator(
+    auto minibatchSource = TextFormatMinibatchSource(
         L"SimpleDataTrain_cntk_text.txt",
         { { featureStreamName, inputDim }, { labelsStreamName, numOutputClasses } },
         MinibatchSource::InfinitelyRepeat,
@@ -137,7 +138,7 @@ void TestMinibatchSourceWarmStart(size_t numMBs, size_t minibatchSize, size_t wa
         numWorkers,
         0);
 
-    auto minibatchSource2 = TextFormatMinibatchSourceWithMockCommunicator(
+    auto minibatchSource2 = TextFormatMinibatchSource(
         L"SimpleDataTrain_cntk_text.txt",
         { { featureStreamName, inputDim }, { labelsStreamName, numOutputClasses } },
         MinibatchSource::InfinitelyRepeat,
