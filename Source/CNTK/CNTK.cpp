@@ -75,7 +75,13 @@ void SetupProfiling(ProfilerContext& profilerContext, const ConfigParamType& con
 {
     if (config(L"profilerEnabled", false))
     {
-        profilerContext.Init(config(L"profilerDirectory", L"./profiler"),
+        string workdir = getenv("WORK_DIR");
+        if (workdir.empty())
+        {
+            workdir = ".";
+        }
+        workdir += "/profiler";
+        profilerContext.Init(config(L"profilerDirectory", s2ws(workdir)),
                              config(L"profilerBufferSize", static_cast<uint64_t>(32ull * 1024ull * 1024ull)),
                              std::to_wstring(nodeRank), config(L"profilerSyncGpu", true));
     }
