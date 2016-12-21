@@ -359,6 +359,10 @@ void BlockRandomizer::SetCurrentSamplePosition(size_t currentSamplePosition)
     size_t offsetInSweep = currentSamplePosition % m_sweepTotalNumberOfSamples;
     size_t newOffset = m_sequenceRandomizer->Seek(offsetInSweep, m_sweep);
     m_globalSamplePosition = m_sweep * m_sweepTotalNumberOfSamples + newOffset;
+
+    // Check if we have some data, if not set to the end of epoch.
+    if (m_useLocalTimeline && m_config.m_workerRank >= m_chunkRandomizer->GetRandomizedChunks().size())
+        m_globalSamplePosition = m_epochStartPosition + m_epochSize;
 }
 
 void BlockRandomizer::SetConfiguration(const ReaderConfiguration& config)
