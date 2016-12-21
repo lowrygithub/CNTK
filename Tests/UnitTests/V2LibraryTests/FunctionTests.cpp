@@ -659,9 +659,5 @@ void FunctionTests()
     }
 
     TestOuputVariableName(DeviceDescriptor::CPUDevice());
-    if (IsGPUAvailable())
-    {
-        TestOuputVariableName(DeviceDescriptor::GPUDevice(0));
-    }
 }
 
